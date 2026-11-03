@@ -1,23 +1,41 @@
 #!/bin/bash
 
 # --- 參數檢查 ---
-if [ "$#" -ne 3 ]; then
-    echo "Usage: $0 <repo_name> <source_repo_path> <target_repo_path>"
+if [ "$#" -ne 4 ]; then
+    echo "Usage: $0 <config_file> <repo_name> <source_repo_path> <target_repo_path>"
     exit 1
 fi
 
-name="$1"
-source="$2"
-target="$3"
-working_home=~/projects/gemma/source-sync
+config_file="$1"
+name="$2"
+source="${3:-$2}"
+target="$4"
+
+if [ ! -f "$config_file" ]; then
+    echo "找不到設定檔: $config_file"
+    exit 1
+fi
+# shellcheck disable=SC1090
+source "$config_file"
+
+for v in AWS_ACCOUNT_ID AWS_PROFILE_NAME AWS_REGION SNS_TOPIC_NAME SNS_SUBJECT_PREFIX \
+         TOKEN WORKING_HOME SOURCE_URL_BASE TARGET_URL_BASE; do
+    if [ -z "${!v}" ]; then
+        echo "設定檔缺少參數: $v"
+        exit 1
+    fi
+done
+
+working_home="$WORKING_HOME"
 temp_repo="$working_home/temp/$name"
-token="this-is-secret" 
+token="$TOKEN"
+topic_arn="arn:aws:sns:${AWS_REGION}:${AWS_ACCOUNT_ID}:${SNS_TOPIC_NAME}"
 
 # --- 函數: 發送通知 ---
 send_sns() {
     local subject="$1"
     local message="$2"
-    aws sns publish --profile misystex --topic-arn arn:aws:sns:ap-southeast-1:1234567890:sync-source --subject "FCB $subject" --message "$message"
+    aws sns publish --profile "$AWS_PROFILE_NAME" --region "$AWS_REGION" --topic-arn "$topic_arn" --subject "$SNS_SUBJECT_PREFIX $subject" --message "$message"
 }
 
 # --- 工作目錄設置 ---
@@ -29,10 +47,9 @@ current_date=$(date +"%Y-%m-%d %H:%M:%S")
 echo "現在時間: $current_date"
 
 # --- 倉庫 URL 設置 ---
-#source_repo="https://misystexuser:misystexuser3edc@192.168.68.231/$source"
-source_repo="ssh://git-codecommit.ap-southeast-1.amazonaws.com/v1/repos/$source"
-target_repo_sensitive="https://oauth2:$token@git.systex.com/$target"
-target_repo="https://oauth2:**********@git.systex.com/$target"
+source_repo="$SOURCE_URL_BASE/$source"
+target_repo_sensitive="$TARGET_URL_BASE/$target"
+target_repo="$TARGET_URL_BASE/$target"
 
 echo "來源 GitLab 倉庫的 URL: $source_repo"
 echo "目標 GitLab 倉庫的 URL: $target_repo"
@@ -54,9 +71,7 @@ if ! git remote add target "$target_repo_sensitive"; then
     git remote set-url target "$target_repo_sensitive"
 fi
 
-
 if ! git push --mirror target; then
-#if ! git push --all target || ! git push --tags target; then
     send_sns "源碼同步失敗(優化版) $name" "推送到目標倉庫失敗 $target_repo"
     exit 1
 fi
@@ -84,7 +99,7 @@ echo "來源 $source_total_commits commits"
 echo "目標 $target_total_commits commits"
 
 # --- 結果通知 ---
-result_file="$working_home/result.tmp"
+result_file="$working_home/result.$name.tmp"
 echo "來源 $source_total_commits commits" > "$result_file"
 echo "目標 $target_total_commits commits" >> "$result_file"
 
