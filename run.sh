@@ -1,69 +1,50 @@
 #!/bin/bash
 
-BASE_DIR=~/projects/gemma/source-sync
-LOG_DIR="$BASE_DIR/logs"
-SCRIPT="$BASE_DIR/sync.sh"
+# --- 參數檢查 ---
+if [ "$#" -lt 1 ] || [ "$#" -gt 2 ]; then
+    echo "Usage: $0 <config_file> [repo_name|--all]"
+    exit 1
+fi
 
-# 建立 log 資料夾（如果不存在）
+CONFIG_FILE="$1"
+TARGET_INPUT="${2:---all}"
+
+if [ ! -f "$CONFIG_FILE" ]; then
+    echo "找不到設定檔: $CONFIG_FILE"
+    exit 1
+fi
+# shellcheck disable=SC1090
+source "$CONFIG_FILE"
+
+for v in AWS_ACCOUNT_ID AWS_PROFILE_NAME AWS_REGION SNS_TOPIC_NAME SNS_SUBJECT_PREFIX WORKING_HOME; do
+    if [ -z "${!v}" ]; then
+        echo "設定檔缺少參數: $v"
+        exit 1
+    fi
+done
+if [ "${#REPOS[@]}" -eq 0 ]; then
+    echo "設定檔缺少 REPOS"
+    exit 1
+fi
+
+BASE_DIR="$WORKING_HOME"
+LOG_DIR="$BASE_DIR/logs"
+SCRIPT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/sync.sh"
+CONFIG_ABS="$(cd "$(dirname "$CONFIG_FILE")" && pwd)/$(basename "$CONFIG_FILE")"
+TOPIC_ARN="arn:aws:sns:${AWS_REGION}:${AWS_ACCOUNT_ID}:${SNS_TOPIC_NAME}"
+
 mkdir -p "$LOG_DIR"
 
-# target 名稱與對應的路徑（平行陣列）
-NAMES=(
-  "fcbframework"
-  "mgm-service-auth"
-  "com-service-errormessage"
-  "mgm-service-batchmaintenance"
-  "batch-mgr-web"
-  "daily-mgm-saga"
-  "daily-mgm-daemonsaga"
-  "mgm-service-saga"
-  "com-acl-example"
-  "fir-service-example"
-  "fir-channel-example"
-  "fir-service-sagaexample"
-  "fir-batch-example"
-  "fir-service-empty"
-  "fir-batch-empty"
-  "fcb-data"
-)
-
-SOURCE_PATHS=(
-  "fcbframework"
-  "mgm-service-auth"
-  "com-service-errormessage"
-  "mgm-service-batchmaintenance"
-  "batch-mgr-web"
-  "daily-mgm-saga"
-  "daily-mgm-daemonsaga"
-  "mgm-service-saga"
-  "com-acl-example"
-  "fir-service-example"
-  "fir-channel-example"
-  "fir-service-sagaexample"
-  "fir-batch-example"
-  "fir-service-empty"
-  "fir-batch-empty"
-  "fcb-data"
-)
-
-TARGET_PATHS=(
-  "ob18022040002/fcbframework"
-  "ob18022040002/mgm-service-auth"
-  "ob18022040002/com-service-errormessage"
-  "ob18022040002/mgm-service-batchmaintenance"
-  "ob18022040002/batch-mgr-web"
-  "ob18022040002/daily-mgm-saga"
-  "ob18022040002/daily-mgm-daemonsaga"
-  "ob18022040002/mgm-service-saga"
-  "ob18022040002/com-acl-example"
-  "ob18022040002/fir-service-example"
-  "ob18022040002/fir-channel-example"
-  "ob18022040002/fir-service-sagaexample"
-  "ob18022040002/fir-batch-example"
-  "ob18022040002/fir-service-empty"
-  "ob18022040002/fir-batch-empty"
-  "ob18022040002/fcb-data"
-)
+# 解析 REPOS (name|source_path|target_path)
+NAMES=()
+SOURCE_PATHS=()
+TARGET_PATHS=()
+for entry in "${REPOS[@]}"; do
+  IFS='|' read -r n s t <<< "$entry"
+  NAMES+=("$n")
+  SOURCE_PATHS+=("${s:-$n}")
+  TARGET_PATHS+=("$t")
+done
 
 # ============================================================
 # 執行結果統計
@@ -89,9 +70,10 @@ send_sns() {
   local message="$2"
 
   aws sns publish \
-    --profile misystex \
-    --topic-arn arn:aws:sns:ap-southeast-1:1234567890:sync-source \
-    --subject "FCB $subject" \
+    --profile "$AWS_PROFILE_NAME" \
+    --region "$AWS_REGION" \
+    --topic-arn "$TOPIC_ARN" \
+    --subject "$SNS_SUBJECT_PREFIX $subject" \
     --message "$message"
 }
 
@@ -157,9 +139,7 @@ send_summary() {
 
   echo ""
   echo "📧 發送同步結果通知..."
-  send_sns "$subject" "$message"
-
-  if [ $? -eq 0 ]; then
+  if send_sns "$subject" "$message"; then
     echo "📧 通知發送成功"
   else
     echo "⚠️ 通知發送失敗"
@@ -209,14 +189,13 @@ run_sync() {
   local log="$LOG_DIR/sync_${name}.log"
 
   TOTAL=$((TOTAL + 1))
-  
+
   echo "🔄 執行同步：$name"
-  echo "📁 路徑：$source"
+  echo "📁 來源：$source"
+  echo "📁 目標：$target"
   echo "📝 Log：$log"
 
-  $SCRIPT "$name" "$source" "$target" >> "$log" 2>&1
-
-  if [ $? -eq 0 ]; then
+  if "$SCRIPT" "$CONFIG_ABS" "$name" "$source" "$target" >> "$log" 2>&1; then
     echo "✅ 同步成功：$name"
     SUCCESS_COUNT=$((SUCCESS_COUNT + 1))
     SUCCESS_LIST+=("$name")
@@ -229,10 +208,10 @@ run_sync() {
 }
 
 # ============================================================
-# 若沒參數或參數為 --all，執行所有項目
+# 全部執行
 # ============================================================
 
-if [ -z "$1" ] || [ "$1" == "--all" ]; then
+if [ "$TARGET_INPUT" == "--all" ]; then
   echo "🚀 執行全部同步任務..."
   for i in "${!NAMES[@]}"; do
     run_sync "${NAMES[$i]}" "${SOURCE_PATHS[$i]}" "${TARGET_PATHS[$i]}"
@@ -245,7 +224,6 @@ fi
 # 單項執行
 # ============================================================
 
-TARGET_INPUT="$1"
 FOUND=0
 
 for i in "${!NAMES[@]}"; do
@@ -265,4 +243,3 @@ if [ "$FOUND" -eq 0 ]; then
 
   exit 1
 fi
-
