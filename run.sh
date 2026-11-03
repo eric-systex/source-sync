@@ -2,11 +2,12 @@
 
 # --- 參數檢查 ---
 if [ "$#" -lt 1 ] || [ "$#" -gt 2 ]; then
-    echo "Usage: $0 <config_file> [repo_name|--all]"
+    echo "Usage: $0 <project> [repo_name|--all]"
     exit 1
 fi
 
-CONFIG_FILE="$1"
+PROJECT="$1"
+CONFIG_FILE="conf/${PROJECT}.conf"
 TARGET_INPUT="${2:---all}"
 
 if [ ! -f "$CONFIG_FILE" ]; then
@@ -16,7 +17,7 @@ fi
 # shellcheck disable=SC1090
 source "$CONFIG_FILE"
 
-for v in AWS_ACCOUNT_ID AWS_PROFILE_NAME AWS_REGION SNS_TOPIC_NAME SNS_SUBJECT_PREFIX WORKING_HOME; do
+for v in AWS_ACCOUNT_ID AWS_PROFILE_NAME AWS_REGION SNS_SUBJECT_PREFIX TOKEN; do
     if [ -z "${!v}" ]; then
         echo "設定檔缺少參數: $v"
         exit 1
@@ -27,11 +28,11 @@ if [ "${#REPOS[@]}" -eq 0 ]; then
     exit 1
 fi
 
-BASE_DIR="$WORKING_HOME"
+BASE_DIR="${HOME}/projects/source-sync"
 LOG_DIR="$BASE_DIR/logs"
 SCRIPT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/sync.sh"
 CONFIG_ABS="$(cd "$(dirname "$CONFIG_FILE")" && pwd)/$(basename "$CONFIG_FILE")"
-TOPIC_ARN="arn:aws:sns:${AWS_REGION}:${AWS_ACCOUNT_ID}:${SNS_TOPIC_NAME}"
+TOPIC_ARN="arn:aws:sns:${AWS_REGION}:${AWS_ACCOUNT_ID}:sync-source"
 
 mkdir -p "$LOG_DIR"
 
@@ -68,13 +69,7 @@ NOTIFICATION_SENT=0
 send_sns() {
   local subject="$1"
   local message="$2"
-
-  aws sns publish \
-    --profile "$AWS_PROFILE_NAME" \
-    --region "$AWS_REGION" \
-    --topic-arn "$TOPIC_ARN" \
-    --subject "$SNS_SUBJECT_PREFIX $subject" \
-    --message "$message"
+  aws sns publish --profile "$AWS_PROFILE_NAME" --region "$AWS_REGION" --topic-arn "$TOPIC_ARN" --subject "$SNS_SUBJECT_PREFIX $subject" --message "$message"
 }
 
 
