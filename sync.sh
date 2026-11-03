@@ -18,18 +18,17 @@ fi
 # shellcheck disable=SC1090
 source "$config_file"
 
-for v in AWS_ACCOUNT_ID AWS_PROFILE_NAME AWS_REGION SNS_TOPIC_NAME SNS_SUBJECT_PREFIX \
-         TOKEN WORKING_HOME SOURCE_URL_BASE TARGET_URL_BASE; do
+for v in AWS_ACCOUNT_ID AWS_PROFILE_NAME AWS_REGION SNS_SUBJECT_PREFIX TOKEN; do
     if [ -z "${!v}" ]; then
         echo "設定檔缺少參數: $v"
         exit 1
     fi
 done
 
-working_home="$WORKING_HOME"
+working_home="${HOME}/projects/source-sync"
 temp_repo="$working_home/temp/$name"
 token="$TOKEN"
-topic_arn="arn:aws:sns:${AWS_REGION}:${AWS_ACCOUNT_ID}:${SNS_TOPIC_NAME}"
+topic_arn="arn:aws:sns:${AWS_REGION}:${AWS_ACCOUNT_ID}:sync-source"
 
 # --- 函數: 發送通知 ---
 send_sns() {
@@ -47,9 +46,10 @@ current_date=$(date +"%Y-%m-%d %H:%M:%S")
 echo "現在時間: $current_date"
 
 # --- 倉庫 URL 設置 ---
-source_repo="$SOURCE_URL_BASE/$source"
-target_repo_sensitive="$TARGET_URL_BASE/$target"
-target_repo="$TARGET_URL_BASE/$target"
+source_repo="ssh://git-codecommit.${AWS_REGION}.amazonaws.com/v1/repos/$source"
+target_repo_sensitive="https://oauth2:$token@git.systex.com/$target"
+target_repo="https://oauth2:**********@git.systex.com/$target"
+
 
 echo "來源 GitLab 倉庫的 URL: $source_repo"
 echo "目標 GitLab 倉庫的 URL: $target_repo"
